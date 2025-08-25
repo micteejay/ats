@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <math.h>
 #include <string.h>
+#include <DNSServer.h>
 
 // WiFi Configuration
 #define SSID_MAX_LEN 32
@@ -16,6 +17,7 @@ const char* hostname = "ATS-ESP32";
 
 // Web Server
 WebServer server(80);
+DNSServer dnsServer;
 
 // LCD Configuration
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -53,8 +55,8 @@ uint16_t MAX_VOLTAGE = 290;           // Maximum acceptable voltage
 uint16_t VOLTAGE_HYSTERESIS = 10;     // Voltage switching hysteresis
 
 // Timing parameters
-uint16_t SWITCH_DELAY = 100;          // 100ms delay before switching
-uint16_t SOURCE_RETURN_DELAY = 2000;  // 2 second delay before switching back
+uint32_t SWITCH_DELAY = 100;          // 100ms delay before switching
+uint32_t SOURCE_RETURN_DELAY = 2000;  // 2 second delay before switching back
 
 // Calibration variables
 int8_t nepa_voltage_offset = 0;       // NEPA voltage calibration offset
@@ -151,6 +153,7 @@ uint32_t last_energy_update = 0;
 #define EEPROM_SETTINGS_ADDR    32
 #define EEPROM_WIFI_SSID_ADDR   50
 #define EEPROM_WIFI_PASS_ADDR   (EEPROM_WIFI_SSID_ADDR + SSID_MAX_LEN)
+#define SETTINGS_MAGIC_NUMBER   0x12345678
 
 // Main menu items
 const char* main_menu[] = {
@@ -193,6 +196,8 @@ const char* calibration_menu[] = {
   "Back"
 };
 const uint8_t calibration_menu_size = 5;
+
+void startAPMode();
 
 void setup() {
   Serial.begin(115200);
@@ -244,39 +249,41 @@ void setup() {
   delay(1000);
 
   // Initialize WiFi
-  WiFi.mode(WIFI_STA);
-  WiFi.hostname(hostname);
-  WiFi.begin(ssid, password);
+  if (strlen(ssid) > 0) {
+    WiFi.mode(WIFI_STA);
+    WiFi.hostname(hostname);
+    WiFi.begin(ssid, password);
 
-  lcd.setCursor(0, 1);
-  lcd.print(F("Connecting WiFi..."));
-
-  // Wait for WiFi connection
-  int wifi_timeout = 0;
-  while (WiFi.status() != WL_CONNECTED && wifi_timeout < 20) {
-    delay(500);
-    wifi_timeout++;
     lcd.setCursor(0, 1);
-    lcd.print(F("WiFi:"));
-    lcd.print(wifi_timeout * 0.5, 1);
-    lcd.print(F("s"));
+    lcd.print(F("Connecting WiFi..."));
+
+    int wifi_timeout = 0;
+    while (WiFi.status() != WL_CONNECTED && wifi_timeout < 20) {
+      delay(500);
+      wifi_timeout++;
+      lcd.setCursor(0, 1);
+      lcd.print(F("WiFi:"));
+      lcd.print(wifi_timeout * 0.5, 1);
+      lcd.print(F("s"));
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      wifi_connected = true;
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(F("WiFi Connected!"));
+      lcd.setCursor(0, 1);
+      lcd.print(WiFi.localIP());
+      delay(2000);
+    } else {
+      wifi_connected = false;
+    }
+  } else {
+    wifi_connected = false;
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    wifi_connected = true;
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(F("WiFi Connected!"));
-    lcd.setCursor(0, 1);
-    lcd.print(WiFi.localIP());
-    delay(2000);
-  } else {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(F("WiFi Failed"));
-    lcd.setCursor(0, 1);
-    lcd.print(F("Check Settings"));
-    delay(2000);
+  if (!wifi_connected) {
+    startAPMode();
   }
 
   // Setup web server routes
@@ -298,7 +305,32 @@ void setup() {
   status.state_change_time = millis();
 }
 
+void startAPMode() {
+  const char* ap_ssid = "ATS-ESP32-Setup";
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ap_ssid);
+
+  // Set up DNS server for captive portal
+  dnsServer.start(53, "*", WiFi.softAPIP());
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(F("WiFi Setup Mode"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("SSID:"));
+  lcd.setCursor(4, 1);
+  lcd.print(ap_ssid);
+
+  Serial.println("Entered AP Mode. SSID: ATS-ESP32-Setup");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.softAPIP());
+}
+
 void loop() {
+  if (!wifi_connected) {
+    dnsServer.processNextRequest();
+  }
   unsigned long current_time = millis();
 
   // Handle web server
@@ -315,6 +347,12 @@ void loop() {
       exitMenu();
     }
     return; // Skip normal operation when in menu
+  }
+
+  if (!wifi_connected) {
+    // In AP mode, we just handle server and dns requests.
+    // The main loop will be re-entered after a client sets the wifi credentials and the device reboots.
+    return;
   }
 
   // Read input switches
@@ -2064,7 +2102,11 @@ void handleSettingsUpdate() {
 }
 
 void handleNotFound() {
-  server.send(404, "text/plain", "Not found");
+  if (!wifi_connected) {
+    handleWifiConfigPage();
+  } else {
+    server.send(404, "text/plain", "Not found");
+  }
 }
 
 // EEPROM Functions
@@ -2134,6 +2176,7 @@ void saveCalibrationData() {
 
   // Save settings
   struct Settings {
+    uint32_t magic_number;
     int min_voltage;
     int max_voltage;
     unsigned long switch_delay;
@@ -2141,6 +2184,7 @@ void saveCalibrationData() {
     bool auto_mode_setting;
   } settings;
 
+  settings.magic_number = SETTINGS_MAGIC_NUMBER;
   settings.min_voltage = MIN_VOLTAGE;
   settings.max_voltage = MAX_VOLTAGE;
   settings.switch_delay = SWITCH_DELAY;
@@ -2168,6 +2212,7 @@ void loadSystemData() {
 
   // Load settings
   struct Settings {
+    uint32_t magic_number;
     int min_voltage;
     int max_voltage;
     unsigned long switch_delay;
@@ -2189,11 +2234,15 @@ void loadSystemData() {
   if (current_offset < -100 || current_offset > 100) current_offset = 0;
 
   // Validate and apply settings
-  if (settings.min_voltage >= 100 && settings.min_voltage <= 200) MIN_VOLTAGE = settings.min_voltage;
-  if (settings.max_voltage >= 200 && settings.max_voltage <= 300) MAX_VOLTAGE = settings.max_voltage;
-  if (settings.switch_delay >= 1000 && settings.switch_delay <= 30000) SWITCH_DELAY = settings.switch_delay;
-  if (settings.return_delay >= 30000 && settings.return_delay <= 300000) SOURCE_RETURN_DELAY = settings.return_delay;
-  auto_mode = settings.auto_mode_setting;
+  if (settings.magic_number == SETTINGS_MAGIC_NUMBER) {
+    if (settings.min_voltage >= 100 && settings.min_voltage <= 200) MIN_VOLTAGE = settings.min_voltage;
+    if (settings.max_voltage >= 200 && settings.max_voltage <= 300) MAX_VOLTAGE = settings.max_voltage;
+    if (settings.switch_delay >= 1000 && settings.switch_delay <= 60000) SWITCH_DELAY = settings.switch_delay;
+    if (settings.return_delay >= 30000 && settings.return_delay <= 600000) SOURCE_RETURN_DELAY = settings.return_delay;
+    auto_mode = settings.auto_mode_setting;
+  } else {
+    Serial.println("Settings not found or invalid, using default values.");
+  }
 
   kwh_total = kwh_nepa + kwh_gen;
 
