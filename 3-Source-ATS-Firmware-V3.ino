@@ -137,6 +137,11 @@ bool calibrating_voltage = false;
 int8_t current_cal_value = 0;
 uint8_t current_cal_source = 0; // 0=NEPA, 1=GEN, 2=INV, 3=Current
 
+// Settings editing state variables
+bool editing_setting = false;
+int setting_edit_value = 0;
+uint8_t setting_edit_index = 0;
+
 // Main menu items stored in PROGMEM to save SRAM
 const char menu_main_0[] PROGMEM = "1.Monitor";
 const char menu_main_1[] PROGMEM = "2.Settings";
@@ -930,6 +935,55 @@ void handleManualInput() {
 }
 
 void handleMenu() {
+  // Check if we are editing a setting value
+  if (editing_setting) {
+    if (button_up_pressed) {
+      button_up_pressed = false;
+      setting_edit_value++;
+      // Add bounds checking based on which setting is being edited
+      switch (setting_edit_index) {
+        case 0: if (setting_edit_value > 200) setting_edit_value = 200; break;
+        case 1: if (setting_edit_value > 300) setting_edit_value = 300; break;
+        case 2: if (setting_edit_value > 60) setting_edit_value = 60; break;
+        case 3: if (setting_edit_value > 600) setting_edit_value = 600; break;
+      }
+      displayMenu();
+    }
+
+    if (button_down_pressed) {
+      button_down_pressed = false;
+      setting_edit_value--;
+      // Add bounds checking
+      switch (setting_edit_index) {
+        case 0: if (setting_edit_value < 100) setting_edit_value = 100; break;
+        case 1: if (setting_edit_value < 200) setting_edit_value = 200; break;
+        case 2: if (setting_edit_value < 1) setting_edit_value = 1; break;
+        case 3: if (setting_edit_value < 30) setting_edit_value = 30; break;
+      }
+      displayMenu();
+    }
+
+    if (button_enter_pressed) {
+      button_enter_pressed = false;
+      // Save the edited value back to the actual setting variable
+      switch (setting_edit_index) {
+        case 0: MIN_VOLTAGE = setting_edit_value; break;
+        case 1: MAX_VOLTAGE = setting_edit_value; break;
+        case 2: SWITCH_DELAY = setting_edit_value * 1000; break;
+        case 3: SOURCE_RETURN_DELAY = setting_edit_value * 1000; break;
+      }
+      editing_setting = false; // Exit editing mode
+      settings_modified = true;
+
+      lcd.clear();
+      lcd.print(F("Setting Saved!"));
+      delay(1500);
+      wdt_reset();
+      displayMenu();
+    }
+    return; // Prevent normal menu navigation from running
+  }
+
   // Check if we're in calibration mode first
   static bool last_calibrating_state = false;
   if (calibrating_voltage != last_calibrating_state) {
@@ -1103,6 +1157,25 @@ void displayMenuHeaderAndTimeout() {
 
 void displayMenu() {
   lcd.clear();
+
+  // Show a dedicated screen when editing a setting
+  if (editing_setting) {
+    lcd.setCursor(0, 0);
+    lcd.print(F("EDIT:"));
+    lcdPrintMenuItem(settings_menu, setting_edit_index);
+    lcd.setCursor(0, 1);
+    lcd.print(F("Value: "));
+    lcd.print(setting_edit_value);
+
+    // Show units for the value being edited
+    switch (setting_edit_index) {
+        case 0: lcd.print(F("V")); break;
+        case 1: lcd.print(F("V")); break;
+        case 2: lcd.print(F("s")); break;
+        case 3: lcd.print(F("s")); break;
+    }
+    return; // Skip the rest of the function
+  }
 
   // Debug display function call
   DEBUG_PRINT(F("DISPLAY MENU - Submenu: "));
@@ -1436,315 +1509,53 @@ void handleMonitorMenu() {
 }
 
 void handleSettingsMenu() {
-  DEBUG_PRINTLN(F("=== SETTINGS MENU ENTERED ==="));
+  // This function is now just a dispatcher to enter editing mode
+  // or handle the "Back" command.
+  if (!button_enter_pressed) return;
 
-  static bool editing = false;
-  static int edit_value = 0;
-  static uint8_t last_submenu_index = 255; // Track submenu changes
-
-  // Debug output for settings menu
-  DEBUG_PRINT(F("SETTINGS MENU - Submenu: "));
-  DEBUG_PRINTF(submenu_index, DEC);
-  DEBUG_PRINT(F(", Editing: "));
-  DEBUG_PRINTLN(editing ? F("YES") : F("NO"));
-
-  // Reset editing state if submenu changed
-  if (last_submenu_index != submenu_index) {
-    editing = false;
-    last_submenu_index = submenu_index;
-    DEBUG_PRINT(F("SETTINGS: Submenu changed to "));
-    DEBUG_PRINTLN(submenu_index);
-  }
-
-  // Handle editing mode
-  if (editing) {
-    DEBUG_PRINTLN(F("SETTINGS: In editing mode"));
-    // Handle value editing
-    if (button_up_pressed) {
-      button_up_pressed = false;
-      edit_value++;
-      // Add bounds checking
-      switch (submenu_index) {
-        case 0: if (edit_value > 200) edit_value = 200; break; // Min voltage max
-        case 1: if (edit_value > 300) edit_value = 300; break; // Max voltage max
-        case 2: if (edit_value > 60) edit_value = 60; break;   // Switch delay max
-        case 3: if (edit_value > 600) edit_value = 600; break; // Return delay max
-      }
-      DEBUG_PRINT(F("SETTINGS: Value increased to "));
-      DEBUG_PRINTLN(edit_value);
-
-      // Update display immediately
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(F("EDITING:"));
-      lcdPrintMenuItem(settings_menu, submenu_index);
-      lcd.setCursor(0, 1);
-      lcd.print(F("Value:"));
-      lcd.print(edit_value);
-
-      // Show units
-      switch (submenu_index) {
-        case 0: lcd.print(F("V")); break;
-        case 1: lcd.print(F("V")); break;
-        case 2: lcd.print(F("s")); break;
-        case 3: lcd.print(F("s")); break;
-      }
-    }
-
-    if (button_down_pressed) {
-      button_down_pressed = false;
-      edit_value--;
-      // Add bounds checking
-      switch (submenu_index) {
-        case 0: if (edit_value < 100) edit_value = 100; break; // Min voltage min
-        case 1: if (edit_value < 200) edit_value = 200; break; // Max voltage min
-        case 2: if (edit_value < 1) edit_value = 1; break;     // Switch delay min
-        case 3: if (edit_value < 30) edit_value = 30; break;   // Return delay min
-      }
-      DEBUG_PRINT(F("SETTINGS: Value decreased to "));
-      DEBUG_PRINTLN(edit_value);
-
-      // Update display immediately
-    lcd.clear();
-    lcd.setCursor(0, 0);
-      lcd.print(F("EDITING:"));
-    lcdPrintMenuItem(settings_menu, submenu_index);
-    lcd.setCursor(0, 1);
-    lcd.print(F("Value:"));
-    lcd.print(edit_value);
-
-      // Show units
-      switch (submenu_index) {
-        case 0: lcd.print(F("V")); break;
-        case 1: lcd.print(F("V")); break;
-        case 2: lcd.print(F("s")); break;
-        case 3: lcd.print(F("s")); break;
-      }
-    }
-
-    if (button_enter_pressed) {
-      button_enter_pressed = false;
-      // Save the edited value
-      switch (submenu_index) {
-        case 0:
-          MIN_VOLTAGE = edit_value;
-          DEBUG_PRINT(F("SETTINGS: Min Voltage saved as "));
-          DEBUG_PRINTLN(edit_value);
-          break;
-        case 1:
-          MAX_VOLTAGE = edit_value;
-          DEBUG_PRINT(F("SETTINGS: Max Voltage saved as "));
-          DEBUG_PRINTLN(edit_value);
-          break;
-        case 2:
-          SWITCH_DELAY = edit_value * 1000;
-          DEBUG_PRINT(F("SETTINGS: Switch Delay saved as "));
-          DEBUG_PRINTLN(edit_value);
-          break;
-        case 3:
-          SOURCE_RETURN_DELAY = edit_value * 1000;
-          DEBUG_PRINT(F("SETTINGS: Return Delay saved as "));
-          DEBUG_PRINTLN(edit_value);
-          break;
-        default: break;
-      }
-      editing = false;
-      settings_modified = true; // Mark settings as modified
-
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(F("Setting Saved!"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("Value:"));
-      lcd.print(edit_value);
-      delay(1500);
-      wdt_reset(); // Reset watchdog
-      delay(1500);
-
-      // Return to settings display
-      displayMenu();
-      return;
-    }
-
-    // Cancel editing with DOWN button long press
-    static unsigned long down_press_start = 0;
-    if (button_down_pressed) {
-      if (down_press_start == 0) {
-        down_press_start = millis();
-      } else if (millis() - down_press_start > 2000) {
-        // Cancel editing
-        editing = false;
-        down_press_start = 0;
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("Editing"));
-        lcd.setCursor(0, 1);
-        lcd.print(F("Cancelled"));
-        delay(1000);
-        wdt_reset();
-        displayMenu(); // Return to menu
-        return;
-      }
-    } else {
-      down_press_start = 0;
-    }
-
-    return; // Stay in editing mode
-  }
-
-  // Not editing - handle menu navigation
-  DEBUG_PRINT(F("SETTINGS: Button states - UP: "));
-  DEBUG_PRINT(button_up_pressed ? F("YES") : F("NO"));
-  DEBUG_PRINT(F(", DOWN: "));
-  DEBUG_PRINT(button_down_pressed ? F("YES") : F("NO"));
-  DEBUG_PRINT(F(", ENTER: "));
-  DEBUG_PRINTLN(button_enter_pressed ? F("YES") : F("NO"));
-
-  // Also show raw button readings
-  DEBUG_PRINT(F("SETTINGS: Raw buttons - UP: "));
-  DEBUG_PRINT(digitalRead(BTN_UP) ? F("HIGH") : F("LOW"));
-  DEBUG_PRINT(F(", DOWN: "));
-  DEBUG_PRINT(digitalRead(BTN_DOWN) ? F("HIGH") : F("LOW"));
-  DEBUG_PRINT(F(", ENTER: "));
-  DEBUG_PRINTLN(digitalRead(BTN_ENTER) ? F("HIGH") : F("LOW"));
+  button_enter_pressed = false; // Consume the button press
 
   switch (submenu_index) {
     case 0: // Min Voltage
-      DEBUG_PRINTLN(F("SETTINGS: Handling Min Voltage option"));
-      if (button_enter_pressed) {
-        button_enter_pressed = false;
-        edit_value = MIN_VOLTAGE;
-        editing = true;
-        DEBUG_PRINTLN(F("SETTINGS: Editing Min Voltage"));
-
-        // Show editing screen
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("EDITING:"));
-        lcdPrintMenuItem(settings_menu, submenu_index);
-        lcd.setCursor(0, 1);
-        lcd.print(F("Value:"));
-        lcd.print(edit_value);
-        lcd.print(F("V"));
-      } else if (button_up_pressed || button_down_pressed) {
-        // Show preview when navigating
-        DEBUG_PRINTLN(F("SETTINGS: Showing Min Voltage preview"));
-        showSettingPreview(submenu_index);
-        displayMenu(); // Return to menu
-      }
+      editing_setting = true;
+      setting_edit_index = 0;
+      setting_edit_value = MIN_VOLTAGE;
       break;
-
-      case 1: // Max Voltage
-        if (button_enter_pressed) {
-          button_enter_pressed = false;
-          edit_value = MAX_VOLTAGE;
-          editing = true;
-          DEBUG_PRINTLN(F("SETTINGS: Editing Max Voltage"));
-
-          // Show editing screen
-          lcd.clear();
-          lcd.setCursor(0, 0);
-          lcd.print(F("EDITING:"));
-          lcdPrintMenuItem(settings_menu, submenu_index);
-          lcd.setCursor(0, 1);
-          lcd.print(F("Value:"));
-          lcd.print(edit_value);
-          lcd.print(F("V"));
-        } else if (button_up_pressed || button_down_pressed) {
-          // Show preview when navigating
-          showSettingPreview(submenu_index);
-          displayMenu(); // Return to menu
-        }
-        break;
-
+    case 1: // Max Voltage
+      editing_setting = true;
+      setting_edit_index = 1;
+      setting_edit_value = MAX_VOLTAGE;
+      break;
     case 2: // Switch Delay
-      if (button_enter_pressed) {
-        button_enter_pressed = false;
-        edit_value = SWITCH_DELAY / 1000;
-        editing = true;
-        DEBUG_PRINTLN(F("SETTINGS: Editing Switch Delay"));
-
-        // Show editing screen
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("EDITING:"));
-        lcdPrintMenuItem(settings_menu, submenu_index);
-        lcd.setCursor(0, 1);
-        lcd.print(F("Value:"));
-        lcd.print(edit_value);
-        lcd.print(F("s"));
-      } else if (button_up_pressed || button_down_pressed) {
-        // Show preview when navigating
-        showSettingPreview(submenu_index);
-        displayMenu(); // Return to menu
-      }
+      editing_setting = true;
+      setting_edit_index = 2;
+      setting_edit_value = SWITCH_DELAY / 1000;
       break;
-
     case 3: // Return Delay
-      if (button_enter_pressed) {
-        button_enter_pressed = false;
-        edit_value = SOURCE_RETURN_DELAY / 1000;
-        editing = true;
-        DEBUG_PRINTLN(F("SETTINGS: Editing Return Delay"));
-
-        // Show editing screen
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("EDITING:"));
-        lcdPrintMenuItem(settings_menu, submenu_index);
-        lcd.setCursor(0, 1);
-        lcd.print(F("Value:"));
-        lcd.print(edit_value);
-        lcd.print(F("s"));
-      } else if (button_up_pressed || button_down_pressed) {
-        // Show preview when navigating
-        showSettingPreview(submenu_index);
-        displayMenu(); // Return to menu
-        return;
-      }
+      editing_setting = true;
+      setting_edit_index = 3;
+      setting_edit_value = SOURCE_RETURN_DELAY / 1000;
       break;
-
     case 4: // Auto Mode
-      if (button_enter_pressed) {
-        button_enter_pressed = false;
-        auto_mode = !auto_mode;
-        settings_modified = true; // Mark settings as modified
-        DEBUG_PRINT(F("SETTINGS: Auto Mode changed to "));
-        DEBUG_PRINTLN(auto_mode ? F("ENABLED") : F("DISABLED"));
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("Auto Mode:"));
-        lcd.setCursor(0, 1);
-        lcd.print(auto_mode ? F("ENABLED") : F("DISABLED"));
-        delay(1000);
-        wdt_reset(); // Reset watchdog
-        delay(1000);
-
-        // Return to settings display
-        displayMenu();
-      } else if (button_up_pressed || button_down_pressed) {
-        // Show preview when navigating
-        showSettingPreview(submenu_index);
-        displayMenu(); // Return to menu
-        return;
-      }
+      auto_mode = !auto_mode;
+      settings_modified = true;
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(F("Auto Mode:"));
+      lcd.setCursor(0, 1);
+      lcd.print(auto_mode ? F("ENABLED") : F("DISABLED"));
+      delay(1500);
+      wdt_reset();
       break;
-
     case 5: // Back
-      if (button_enter_pressed) {
-        button_enter_pressed = false;
-        DEBUG_PRINTLN(F("SETTINGS: Back to main menu"));
-        in_submenu = false;
-        current_menu = MENU_MAIN;
-        submenu_index = 0;
-        editing = false; // Reset editing state
-      }
+      in_submenu = false;
+      current_menu = MENU_MAIN;
+      submenu_index = 0;
       break;
-
     default:
       break;
   }
+  displayMenu(); // Refresh the display
 }
 
 void handleCalibrationMenu() {
