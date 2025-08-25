@@ -61,6 +61,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // Additional control pins
 #define RESET_ALARM_PIN    12    // Reset alarm button (Moved to 12 to resolve conflict)
+#define AUTO_MODE_PIN      A7    // Switch to force auto mode
 
 // AC Detection Constants
 #define AC_DETECTION_TIMEOUT  100    // 100ms timeout for AC detection
@@ -431,6 +432,7 @@ void setup() {
   pinMode(MANUAL_NEPA_PIN, INPUT_PULLUP);
   pinMode(MANUAL_GEN_PIN, INPUT_PULLUP);
   pinMode(MANUAL_INV_PIN, INPUT_PULLUP);
+  pinMode(AUTO_MODE_PIN, INPUT_PULLUP);
 
   // Initialize outputs to safe state
   digitalWrite(NEPA_RELAY_PIN, LOW);
@@ -765,6 +767,7 @@ void loop() {
   // Handle button inputs
   handleButtons();
   handleManualInput();
+  handleAutoModeSwitch();
 
   // Menu system
   if (menu_active) {
@@ -931,6 +934,27 @@ void handleManualInput() {
     }
     delay(2000);
     wdt_reset();
+  }
+}
+
+void handleAutoModeSwitch() {
+  // If the auto mode pin is triggered (and we're not in the menu)
+  if (!menu_active && digitalRead(AUTO_MODE_PIN) == LOW) {
+    // If we are not already in auto mode, switch to it
+    if (!auto_mode) {
+      auto_mode = true;
+      settings_modified = true;
+
+      // Reset the state machine to re-evaluate the best source
+      current_state = STATE_INIT;
+      status.state_change_time = millis();
+
+      lcd.clear();
+      lcd.print(F("Auto Mode ON"));
+      DEBUG_PRINTLN(F("FORCED: Auto Mode Enabled"));
+      delay(1500);
+      wdt_reset();
+    }
   }
 }
 
