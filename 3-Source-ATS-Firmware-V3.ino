@@ -1069,7 +1069,6 @@ void handleMenu() {
   }
 
   if (button_enter_pressed) {
-    button_enter_pressed = false;
     handleMenuSelection();
   }
 
@@ -1346,6 +1345,9 @@ void handleMenuSelection() {
 }
 
 void handleMonitorMenu() {
+  // Consume the enter button press to prevent re-triggering
+  button_enter_pressed = false;
+
   switch (submenu_index) {
     case 0: // NEPA Status
       lcd.clear();
@@ -1747,6 +1749,9 @@ void handleSettingsMenu() {
 
 void handleCalibrationMenu() {
   if (!calibrating_voltage) {
+    // This is the entry point, consume the flag
+    button_enter_pressed = false;
+
     switch (submenu_index) {
       case 0: // NEPA Voltage
         current_cal_value = nepa_voltage_offset;
@@ -1925,6 +1930,9 @@ void displaySettingsValue(uint8_t setting_index) {
 }
 
 void handleMaintenance() {
+  // Consume the enter button press to prevent re-triggering
+  button_enter_pressed = false;
+
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(F("MAINTENANCE"));
@@ -2039,6 +2047,9 @@ void testRelays() {
 }
 
 void displaySystemInfo() {
+  // Consume the enter button press to prevent re-triggering
+  button_enter_pressed = false;
+
   for (int screen = 0; screen < 3; screen++) {
     lcd.clear();
 
